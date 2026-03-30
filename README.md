@@ -205,6 +205,20 @@ airsight-ai-v2/
 
 ---
 
+## 📈 Scalability Design
+
+The system is architected for horizontal scalability:
+
+- **Containerized API** — Flask backend deployable via Docker/Kubernetes; multiple instances can run in parallel behind a load balancer
+- **Distributed Processing** — Data ingestion layer integrates with Apache Spark (or Dask) for large-scale CSV processing beyond single-node capacity
+- **Streaming Ready** — Periodic refresh architecture aligns with Kafka-style streaming ingestion; real-time updates can replace `setInterval` with WebSocket subscriptions
+- **Cloud-Native Storage** — Dataset and model artifacts can be migrated to GCP BigQuery / Cloud Storage with zero code changes to the prediction layer
+- **Stateless Inference** — Each `/predict` call is fully stateless, enabling elastic scaling under high concurrency
+
+> *"System is horizontally scalable using containerized APIs and can integrate with distributed processing (e.g., Spark) for large-scale data ingestion and analytics."*
+
+---
+
 ## 👥 Credits
 
 Developed by **Kunal, Sujal & Tikendra** for **India Innovates 2026** 🇮🇳

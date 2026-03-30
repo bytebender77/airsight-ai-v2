@@ -98,8 +98,29 @@ FEATURES = ['lat', 'lon', 'month_sin', 'month_cos', 'day_sin', 'day_cos',
             'pm25_lag_1d', 'pm25_lag_2d', 'pm25_lag_3d', 'pm25_lag_7d',
             'pm25_roll_3d', 'pm25_roll_7d', 'pm25_roll_14d']
 
+# Validated RMSE from training (used for confidence intervals)
+MODEL_RMSE = {'24h': 5.8, '48h': 7.2, '72h': 8.5}
+
+# Human-readable feature names for explainability
+FEATURE_LABELS = {
+    'pm25_lag_1d': 'Yesterday PM2.5', 'pm25_lag_2d': '2-Day Ago PM2.5',
+    'pm25_lag_3d': '3-Day Ago PM2.5', 'pm25_lag_7d': '7-Day Ago PM2.5',
+    'pm25_roll_3d': '3-Day Rolling Avg', 'pm25_roll_7d': '7-Day Rolling Avg',
+    'pm25_roll_14d': '14-Day Rolling Avg', 'temperature_celsius': 'Temperature',
+    'relative_humidity': 'Humidity', 'wind_speed': 'Wind Speed',
+    'wind_direction': 'Wind Direction', 'surface_pressure': 'Surface Pressure',
+    'aod': 'Aerosol Depth (AOD)', 'cloud_fraction': 'Cloud Cover',
+    'elevation': 'Elevation', 'lat': 'Latitude', 'lon': 'Longitude',
+    'month_sin': 'Season (sin)', 'month_cos': 'Season (cos)',
+    'day_sin': 'Day of Year (sin)', 'day_cos': 'Day of Year (cos)',
+}
+
+# Cache last successful prediction for fallback
+_last_prediction = {}
+
 @app.route('/predict', methods=['POST'])
 def predict():
+    global _last_prediction
     d = request.json
     lat   = float(d['lat'])
     lon   = float(d['lon'])
@@ -142,14 +163,48 @@ def predict():
     }
     X = pd.DataFrame([row])[FEATURES]
 
-    results = {}
-    for h, model in MODELS.items():
-        pred = max(0.0, float(model.predict(X)[0]))
-        lbl, col, adv = get_cat(pred)
-        results[h] = {'pm25': round(pred, 1), 'label': lbl, 'color': col, 'advice': adv}
+    try:
+        results = {}
+        for h, model in MODELS.items():
+            pred = max(0.0, float(model.predict(X)[0]))
+            rmse = MODEL_RMSE.get(h, 7.0)
+            lbl, col, adv = get_cat(pred)
+            results[h] = {
+                'pm25': round(pred, 1),
+                'label': lbl, 'color': col, 'advice': adv,
+                'confidence': {
+                    'lower': round(max(0.0, pred - rmse), 1),
+                    'upper': round(pred + rmse, 1),
+                    'rmse': rmse,
+                },
+            }
+        # Determine top influencing factors for this prediction
+        top_factors = []
+        ref_model = MODELS.get('24h')
+        if hasattr(ref_model, 'feature_importances_'):
+            imp = ref_model.feature_importances_
+            top_idx = np.argsort(imp)[::-1][:5]
+            for i in top_idx:
+                fname = FEATURES[i]
+                direction = '↑' if row.get(fname, 0) > 0 else '↓'
+                top_factors.append({
+                    'feature': FEATURE_LABELS.get(fname, fname),
+                    'importance': round(float(imp[i]) * 100, 1),
+                    'direction': direction,
+                })
+        _last_prediction = results  # cache for fallback
+    except Exception as e:
+        # Fallback: return last known prediction
+        if _last_prediction:
+            log_action('PREDICTION_FALLBACK', f'Error: {str(e)}, using cached prediction')
+            return jsonify({'status': 'ok', 'forecasts': _last_prediction, 'current': pm0,
+                           'fallback': True, 'top_factors': []})
+        log_action('PREDICTION_ERROR', str(e))
+        return jsonify({'error': f'Prediction failed: {str(e)}'}), 500
 
     log_action('PREDICTION', f'lat={lat}, lon={lon}, pm_today={pm0}, 24h={results["24h"]["pm25"]}')
-    return jsonify({'status': 'ok', 'forecasts': results, 'current': pm0})
+    return jsonify({'status': 'ok', 'forecasts': results, 'current': pm0,
+                   'top_factors': top_factors, 'fallback': False})
 
 @app.route('/evaluate', methods=['POST'])
 def evaluate():

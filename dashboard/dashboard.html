@@ -1430,6 +1430,7 @@
         });
         const data = await res.json();
         status.innerHTML = '<span class="api-ok">✅ Real XGBoost prediction (R² = 0.979)</span>';
+        if (data.fallback) status.innerHTML += ' <span style="color:#fbbf24">⚠️ Fallback prediction (cached)</span>';
 
         const names = { '24h': '+24h (Tomorrow)', '48h': '+48h (Day After)', '72h': '+72h (3 Days)' };
 
@@ -1447,15 +1448,40 @@
           alertEl.style.display = 'none';
         }
 
-        document.getElementById('resultCards').innerHTML = Object.entries(data.forecasts).map(([h, f]) =>
-          `<div class="result-card">
+        document.getElementById('resultCards').innerHTML = Object.entries(data.forecasts).map(([h, f]) => {
+          const conf = f.confidence || {};
+          const confHtml = conf.rmse
+            ? `<div style="font-size:10px;margin-top:4px;padding:4px 8px;background:rgba(56,189,248,.06);border-radius:6px;border:1px solid rgba(56,189,248,.15)">
+                🎯 <strong style="color:var(--text)">${f.pm25} ± ${conf.rmse}</strong> µg/m³
+                <span style="color:var(--muted)"> (${conf.lower} – ${conf.upper})</span>
+              </div>`
+            : '';
+          return `<div class="result-card">
             <div class="r-horizon">${names[h]}</div>
             <div class="r-val" style="color:${f.color}">${f.pm25} µg/m³</div>
             <div class="r-label" style="color:${f.color}">${f.label}</div>
             <div class="r-advice">${f.advice}</div>
+            ${confHtml}
             <div style="font-size:10px;color:var(--muted);margin-top:4px;padding-top:4px;border-top:1px solid rgba(255,255,255,.05)">${lungEquiv(f.pm25)}</div>
-          </div>`
-        ).join('');
+          </div>`;
+        }).join('');
+
+        // 🧠 Explainability panel (top factors)
+        if (data.top_factors && data.top_factors.length > 0) {
+          const factorsHtml = data.top_factors.map(f =>
+            `<div style="display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.04)">
+              <span style="color:var(--text)">${f.direction} ${f.feature}</span>
+              <span style="color:var(--accent);font-weight:600">${f.importance}%</span>
+            </div>`
+          ).join('');
+          document.getElementById('resultCards').innerHTML += `
+            <div style="background:var(--surface2);border:1px solid var(--border);border-radius:10px;padding:12px;margin-top:8px">
+              <div style="font-size:10px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:8px">🧠 Model Explainability — Top Factors</div>
+              ${factorsHtml}
+              <div style="font-size:9px;color:var(--muted);margin-top:6px;font-style:italic">XGBoost feature importance (gain-based)</div>
+            </div>`;
+        }
+
         document.getElementById('resultArea').style.display = 'block';
 
         // Store for scenario saving
@@ -1971,6 +1997,57 @@
     document.getElementById('scenarioModal').addEventListener('click', function(e) {
       if (e.target === this) this.style.display = 'none';
     });
+
+    // ─── Real-Time Simulation (LLD: streaming analytics) ───────────────────
+    let rtInterval = null;
+    const rtBtn = document.createElement('button');
+    rtBtn.className = 'btn-animate';
+    rtBtn.id = 'btnRealtime';
+    rtBtn.textContent = '📡 Live Mode';
+    rtBtn.title = 'Simulate real-time data refresh every 8 seconds';
+    rtBtn.onclick = toggleRealtime;
+    document.querySelector('.time-bar').appendChild(rtBtn);
+
+    function toggleRealtime() {
+      if (rtInterval) {
+        clearInterval(rtInterval);
+        rtInterval = null;
+        rtBtn.textContent = '📡 Live Mode';
+        rtBtn.classList.remove('playing');
+      } else {
+        rtBtn.textContent = '⏹ Stop Live';
+        rtBtn.classList.add('playing');
+        rtInterval = setInterval(() => {
+          if (!allMonths.length) return;
+          const slider = document.getElementById('timeSlider');
+          let next = (parseInt(slider.value) + 1) % allMonths.length;
+          slider.value = next;
+          onSlider(next);
+        }, 8000);
+      }
+    }
+
+    // ─── RBAC UI Enforcement ───────────────────────────────────────────────
+    function enforceRoleUI() {
+      const role = currentRole;
+      const uploadZone = document.getElementById('uploadZone');
+      const btnSave = document.getElementById('btnSaveScenario');
+      if (role === 'Viewer') {
+        if (uploadZone) { uploadZone.style.opacity = '0.4'; uploadZone.style.pointerEvents = 'none'; }
+        if (btnSave) { btnSave.style.opacity = '0.4'; btnSave.style.pointerEvents = 'none'; }
+      } else {
+        if (uploadZone) { uploadZone.style.opacity = '1'; uploadZone.style.pointerEvents = 'auto'; }
+        if (btnSave) { btnSave.style.opacity = '1'; btnSave.style.pointerEvents = 'auto'; }
+      }
+    }
+
+    // Override onRoleChange to also enforce UI
+    function onRoleChange(role) {
+      currentRole = role;
+      enforceRoleUI();
+    }
+    // Initial enforcement
+    setTimeout(enforceRoleUI, 500);
   </script>
 </body>
 
